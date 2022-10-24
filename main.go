@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"flag"
 	"fmt"
+	"html/template"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -82,15 +86,17 @@ type model struct {
 	focus     int
 	stopwatch stopwatch.Model
 	title     string
+	filePath  string
 }
 
-func newModel() model {
+func newModel(filePath string) model {
 	m := model{
 		input:     newTextarea(),
 		viewport:  viewport.New(0, 0),
 		help:      help.New(),
 		title:     "A New File",
 		stopwatch: stopwatch.NewWithInterval(time.Second),
+		filePath:  filePath,
 		keymap: keymap{
 			quit: key.NewBinding(
 				key.WithKeys("esc", "ctrl+c", "cmd+q"),
@@ -128,7 +134,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.Blur()
 			return m, tea.Quit
 		case key.Matches(msg, m.keymap.save):
-			// saveFile()
+			saveFile(m)
 		default:
 			if !m.input.Focused() {
 				cmd := m.input.Focus()
@@ -218,8 +224,56 @@ func (m model) View() string {
 	return page.String()
 }
 
+func saveFile(m model) {
+	b := strings.Builder{}
+
+	// Front matter
+	homePath, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("Could not find user")
+	}
+
+	split := strings.Split(homePath, "/")
+	userName := split[len(split)-1]
+
+	frontMatterData := map[string]string{
+		"user": userName,
+		"time": m.stopwatch.Elapsed().String(),
+	}
+
+	frontMatterTemplate, err := template.New("").Parse(`---
+{{ range $k, $v := . }}{{$k}} = "{{$v}}"{{ end }}
+---
+`)
+	if err != nil {
+		log.Fatalf("Failed to generate front matter | %v", err)
+	}
+
+	var bytesBuffer bytes.Buffer
+	if err := frontMatterTemplate.Execute(&bytesBuffer, frontMatterData); err != nil {
+		log.Fatalf("Failed to render template")
+	}
+
+	b.WriteString(bytesBuffer.String())
+
+	// Markdown content
+
+	b.WriteString(m.input.Value())
+
+	os.WriteFile(m.filePath, []byte(b.String()), 0666)
+}
+
 func main() {
-	if err := tea.NewProgram(newModel(), tea.WithAltScreen()).Start(); err != nil {
+
+	filePath := flag.String("file-path", "", "path to markdown file")
+	flag.Parse()
+
+	if *filePath == "" {
+		flag.Usage()
+		os.Exit(1)
+	}
+
+	if err := tea.NewProgram(newModel(*filePath), tea.WithAltScreen()).Start(); err != nil {
 		fmt.Println("Error while running program:", err)
 		os.Exit(1)
 	}
